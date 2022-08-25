@@ -6,6 +6,7 @@ import utime
 
 # nRF24L01+ registers
 CONFIG = const(0x00)
+EN_AA = const(0x1)
 EN_RXADDR = const(0x02)
 SETUP_AW = const(0x03)
 SETUP_RETR = const(0x04)
@@ -17,12 +18,16 @@ TX_ADDR = const(0x10)
 RX_PW_P0 = const(0x11)
 FIFO_STATUS = const(0x17)
 DYNPD = const(0x1C)
+FEATURE = const(0x1d)
+ACTIVATE = const(0x10)
 
 # CONFIG register
 EN_CRC = const(0x08)  # enable CRC
 CRCO = const(0x04)  # CRC encoding scheme; 0=1 byte, 1=2 bytes
 PWR_UP = const(0x02)  # 1=power up, 0=power down
 PRIM_RX = const(0x01)  # RX/TX control; 0=PTX, 1=PRX
+EN_ACK_PAY = 2
+EN_DYN_ACK = 1
 
 # RF_SETUP register
 POWER_0 = const(0x00)  # -18 dBm
@@ -48,10 +53,15 @@ W_TX_PAYLOAD = const(0xA0)  # write TX payload
 FLUSH_TX = const(0xE1)  # flush TX FIFO
 FLUSH_RX = const(0xE2)  # flush RX FIFO
 NOP = const(0xFF)  # use to read STATUS register
+EN_DPL = const(4)
+W_ACK_PAYLOAD = const(0xA8)
 
+
+#def _BV(x):
+#    return 1 << x
 
 class NRF24L01:
-    def __init__(self, spi, cs, ce, channel=46, payload_size=16):
+    def __init__(self, spi, cs, ce, channel=80, payload_size=32):
         assert payload_size <= 32
 
         self.buf = bytearray(1)
@@ -79,7 +89,7 @@ class NRF24L01:
             raise OSError("nRF24L01+ Hardware not responding")
 
         # disable dynamic payloads
-        self.reg_write(DYNPD, 0)
+        #self.reg_write(DYNPD, 1)
 
         # auto retransmit delay: 1750us
         # auto retransmit count: 8
@@ -141,11 +151,18 @@ class NRF24L01:
         self.spi.readinto(self.buf, FLUSH_TX)
         self.cs(1)
 
+    def setAutoAck(self,enable):
+        if enable:
+            self.reg_write(EN_AA,0b111111)
+        else:
+            self.reg_write(EN_AA,0)
+            
     # power is one of POWER_x defines; speed is one of SPEED_x defines
     def set_power_speed(self, power, speed):
         setup = self.reg_read(RF_SETUP) & 0b11010001
         self.reg_write(RF_SETUP, setup | power | speed)
 
+         
     # length in bytes: 0, 1 or 2
     def set_crc(self, length):
         config = self.reg_read(CONFIG) & ~(CRCO | EN_CRC)
@@ -203,6 +220,19 @@ class NRF24L01:
     def any(self):
         return not bool(self.reg_read(FIFO_STATUS) & RX_EMPTY)
 
+    def recvD(self):
+        self.cs(0)
+        self.spi.readinto(self.buf, R_RX_PAYLOAD)
+        count=self.getDynamicPayloadSize()
+        buf = self.spi.read(count)
+        self.cs(1)
+        # clear RX ready flag
+        self.reg_write(STATUS, RX_DR)
+
+        return buf
+        
+
+
     def recv(self):
         # get the data
         self.cs(0)
@@ -251,5 +281,48 @@ class NRF24L01:
         status = self.reg_write(STATUS, RX_DR | TX_DS | MAX_RT)
         self.reg_write(CONFIG, self.reg_read(CONFIG) & ~PWR_UP)
         return 1 if status & TX_DS else 2
+    
+    def toggle_features(self):
+        self.reg_write(ACTIVATE,0x73)
+        
+        
+    def getDynamicPayloadSize(self):
+        return self.reg_read(R_RX_PL_WID)
+        
+        
+
+    def enableDynamicPayloads(self):
+        # Enable dynamic payload throughout the system
+        self.reg_write(FEATURE, self.reg_read(FEATURE) | EN_DPL)
+
+        # If it didn't work, the features are not enabled
+        if not self.reg_read(FEATURE):
+            # So enable them and try again
+            self.toggle_features()
+            self.reg_write(FEATURE, self.ref_read(FEATURE) | EN_DPL)
+
+        # Enable dynamic payload on all pipes
+
+        # Not sure the use case of only having dynamic payload on certain
+        # pipes, so the library does not support it.
+        self.reg_write(DYNPD, self.reg_read(DYNPD) | 0x3f)
 
 
+    
+    def enableAckPayload(self):
+        # enable ack payload and dynamic payload features
+        self.reg_write(FEATURE,self.reg_read(FEATURE) | EN_ACK_PAY | EN_DPL)
+
+        # If it didn't work, the features are not enabled
+        if not self.reg_read(FEATURE):
+            # So enable them and try again
+            self.toggle_features()
+            self.reg_write(FEATURE,self.reg_read(FEATURE) | EN_ACK_PAY | EN_DPL)
+
+        # Enable dynamic payload on pipes 0 & 1
+        self.reg_write(DYNPD, self.reg_read(DYNPD) | 0x3)
+
+    def writeAckPayload(self, pipe, buf):
+        self.reg_write_bytes(W_ACK_PAYLOAD|( pipe & 0x7 ),buf)
+
+    
