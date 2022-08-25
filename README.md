@@ -1,8 +1,7 @@
 nrf24l01.py - clone from https://github.com/micropython/micropython/tree/master/drivers/nrf24l01<br>
-              +++ added shockburst method +++
+              +++ added shockburst method +++<br><br>
 nrf24l01Test.py - modified to add pico SPI
-
-<br><br>---SHOCKBURST METHOD ADDED---<br>
+<br><br>-------------SHOCKBURST METHOD ADDED-------------<br>
 
 
 nrf24l01_ds18b20.py - Example of using shockburst method. Emulating my arduino mini with ds18b20 sensor<br>
